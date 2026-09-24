@@ -29,10 +29,84 @@ public final class PolymorphStripPass implements DeobPass, Opcodes {
                 mn.instructions.remove(m2);
                 c++;
             }
+            c += stripDeadPushes(cn, mn);
             if (c > 0) r.detail(cn.name + "#" + mn.name + ": " + c + " junk removed");
             r.add("junkRemoved", c);
         }
         return r;
+    }
+
+    private int stripDeadPushes(ClassNode cn, MethodNode mn) {
+        int total = 0;
+        boolean changed = true;
+        while (changed) {
+            changed = false;
+            for (AbstractInsnNode n : mn.instructions.toArray()) {
+                int op = n.getOpcode();
+                if (op == POP) {
+                    AbstractInsnNode p = prevReal(n);
+                    if (p != null && sefreeCat1(cn, p)) {
+                        mn.instructions.remove(p); mn.instructions.remove(n);
+                        total++; changed = true; break;
+                    }
+                } else if (op == POP2) {
+                    AbstractInsnNode p = prevReal(n);
+                    if (p != null && sefreeCat2(cn, p)) {
+                        mn.instructions.remove(p); mn.instructions.remove(n);
+                        total++; changed = true; break;
+                    }
+                    if (p != null && sefreeCat1(cn, p)) {
+                        AbstractInsnNode p2 = prevReal(p);
+                        if (p2 != null && sefreeCat1(cn, p2)) {
+                            mn.instructions.remove(p2); mn.instructions.remove(p); mn.instructions.remove(n);
+                            total++; changed = true; break;
+                        }
+                    }
+                }
+            }
+        }
+        return total;
+    }
+
+    private static AbstractInsnNode prevReal(AbstractInsnNode n) {
+        AbstractInsnNode p = n.getPrevious();
+        while (p != null && (p.getOpcode() < 0)) {
+            if (p instanceof LabelNode) return null;
+            p = p.getPrevious();
+        }
+        return p;
+    }
+
+    private static boolean sefreeCat1(ClassNode cn, AbstractInsnNode n) {
+        int op = n.getOpcode();
+        if (op == ACONST_NULL || (op >= ICONST_M1 && op <= ICONST_5) || op == FCONST_0 || op == FCONST_1
+            || op == FCONST_2 || op == BIPUSH || op == SIPUSH || op == ILOAD || op == FLOAD || op == ALOAD)
+            return true;
+        if (op == LDC) {
+            Object c = ((LdcInsnNode) n).cst;
+            return !(c instanceof Long) && !(c instanceof Double);
+        }
+        if (op == GETSTATIC) {
+            FieldInsnNode fi = (FieldInsnNode) n;
+            String d = fi.desc;
+            return fi.owner.equals(cn.name) && !d.equals("J") && !d.equals("D");
+        }
+        return false;
+    }
+
+    private static boolean sefreeCat2(ClassNode cn, AbstractInsnNode n) {
+        int op = n.getOpcode();
+        if (op == LCONST_0 || op == LCONST_1 || op == DCONST_0 || op == DCONST_1 || op == LLOAD || op == DLOAD)
+            return true;
+        if (op == LDC) {
+            Object c = ((LdcInsnNode) n).cst;
+            return c instanceof Long || c instanceof Double;
+        }
+        if (op == GETSTATIC) {
+            FieldInsnNode fi = (FieldInsnNode) n;
+            return fi.owner.equals(cn.name) && (fi.desc.equals("J") || fi.desc.equals("D"));
+        }
+        return false;
     }
 
     public String describe(PassResult r) {

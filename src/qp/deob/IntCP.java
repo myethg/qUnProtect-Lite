@@ -71,18 +71,25 @@ public final class IntCP implements Opcodes {
     private final MethodNode method;
     private final AbstractInsnNode[] insns;
     private final Map<LabelNode, Integer> labelIndex = new HashMap<>();
+    private final Map<AbstractInsnNode, Integer> insnIndex = new HashMap<>();
     private final State[] entry;
 
     public IntCP(MethodNode method) {
         this.method = method;
         this.insns = method.instructions.toArray();
-        for (int i = 0; i < insns.length; i++)
+        for (int i = 0; i < insns.length; i++) {
+            insnIndex.put(insns[i], i);
             if (insns[i] instanceof LabelNode) labelIndex.put((LabelNode) insns[i], i);
+        }
         entry = new State[insns.length];
-        run();
+        try {
+            run();
+        } catch (RuntimeException ignored) {
+        }
     }
 
     public Integer intAt(int idx, int depth) {
+        if (idx < 0 || idx >= entry.length) return null;
         State s = entry[idx];
         if (s == null) return null;
         int p = s.stack.size() - 1 - depth;
@@ -91,19 +98,62 @@ public final class IntCP implements Opcodes {
         return (v != null && v.intVal != null) ? (int) (long) v.intVal : null;
     }
 
+    public Integer intAt(AbstractInsnNode insn) {
+        return intAt(insn, 0);
+    }
+
+    public Integer intAt(AbstractInsnNode insn, int depth) {
+        Integer idx = insnIndex.get(insn);
+        return idx == null ? null : intAt(idx, depth);
+    }
+
+    public boolean isConstAt(AbstractInsnNode insn, int depth) {
+        return intAt(insn, depth) != null;
+    }
+
+    private int localSlots() {
+        int need = method.maxLocals;
+        for (AbstractInsnNode n : insns) {
+            if (n instanceof VarInsnNode) {
+                int v = ((VarInsnNode) n).var;
+                int op = n.getOpcode();
+                int w = (op == LLOAD || op == LSTORE || op == DLOAD || op == DSTORE) ? 2 : 1;
+                if (v + w > need) need = v + w;
+            } else if (n instanceof IincInsnNode) {
+                int v = ((IincInsnNode) n).var + 1;
+                if (v > need) need = v;
+            }
+        }
+        return Math.max(need, 1);
+    }
+
     private void run() {
-        V[] loc0 = new V[Math.max(method.maxLocals, 1)];
+        V[] loc0 = new V[localSlots()];
         Arrays.fill(loc0, V.UNKNOWN);
         int li = 0;
         if ((method.access & ACC_STATIC) == 0) loc0[li++] = V.UNKNOWN;
         for (Type t : Type.getArgumentTypes(method.desc)) {
             boolean w = t.getSize() == 2;
-            loc0[li] = w ? V.UNKNOWN_WIDE : V.UNKNOWN;
+            if (li < loc0.length) loc0[li] = w ? V.UNKNOWN_WIDE : V.UNKNOWN;
             li += w ? 2 : 1;
         }
         entry[0] = new State(new ArrayList<>(), loc0);
         Deque<Integer> work = new ArrayDeque<>();
         work.add(0);
+        if (method.tryCatchBlocks != null) {
+            for (TryCatchBlockNode tcb : method.tryCatchBlocks) {
+                Integer hpcI = labelIndex.get(tcb.handler);
+                if (hpcI == null) continue;
+                int hpc = hpcI;
+                ArrayList<V> hst = new ArrayList<>();
+                hst.add(V.UNKNOWN);
+                V[] hloc = new V[loc0.length];
+                Arrays.fill(hloc, V.UNKNOWN);
+                State hs = new State(hst, hloc);
+                if (entry[hpc] == null) { entry[hpc] = hs; work.add(hpc); }
+                else if (entry[hpc].merge(hs)) work.add(hpc);
+            }
+        }
         int guard = 0, cap = insns.length * 40 + 1000;
         while (!work.isEmpty()) {
             if (++guard > cap) break;
@@ -111,7 +161,13 @@ public final class IntCP implements Opcodes {
             State s = entry[pc];
             if (s == null) continue;
             State cur = s.copy();
-            for (int succ : step(pc, cur)) {
+            int[] succs;
+            try {
+                succs = step(pc, cur);
+            } catch (RuntimeException ex) {
+                continue;
+            }
+            for (int succ : succs) {
                 if (succ < 0 || succ >= insns.length) continue;
                 if (entry[succ] == null) { entry[succ] = cur.copy(); work.add(succ); }
                 else if (entry[succ].merge(cur)) work.add(succ);
@@ -142,12 +198,12 @@ public final class IntCP implements Opcodes {
             }
             case ILOAD: case FLOAD: case ALOAD: st.add(loc(s, ((VarInsnNode) n).var)); break;
             case LLOAD: case DLOAD: st.add(wideOf(loc(s, ((VarInsnNode) n).var))); break;
-            case ISTORE: case FSTORE: case ASTORE: s.locals[((VarInsnNode) n).var] = pop(st); break;
-            case LSTORE: case DSTORE: s.locals[((VarInsnNode) n).var] = pop(st); break;
+            case ISTORE: case FSTORE: case ASTORE: store(s, ((VarInsnNode) n).var, pop(st), false); break;
+            case LSTORE: case DSTORE: store(s, ((VarInsnNode) n).var, pop(st), true); break;
             case IINC: {
                 int v = ((IincInsnNode) n).var;
                 V cv = loc(s, v);
-                s.locals[v] = (cv.intVal != null) ? V.ofInt((int) (long) cv.intVal + ((IincInsnNode) n).incr) : V.UNKNOWN;
+                store(s, v, (cv.intVal != null) ? V.ofInt((int) (long) cv.intVal + ((IincInsnNode) n).incr) : V.UNKNOWN, false);
                 break;
             }
             case IALOAD: case FALOAD: case BALOAD: case CALOAD: case SALOAD: pop(st); pop(st); st.add(V.UNKNOWN); break;
@@ -226,7 +282,12 @@ public final class IntCP implements Opcodes {
             case DADD: case DSUB: case DMUL: case DDIV: case DREM: pop(st); pop(st); st.add(V.UNKNOWN_WIDE); break;
             case FNEG: pop(st); st.add(V.UNKNOWN); break;
             case DNEG: pop(st); st.add(V.UNKNOWN_WIDE); break;
-            case LCMP: case FCMPL: case FCMPG: case DCMPL: case DCMPG: pop(st); pop(st); st.add(V.UNKNOWN); break;
+            case LCMP: {
+                V b = pop(st), a = pop(st);
+                st.add((a.longVal != null && b.longVal != null) ? V.ofInt(Long.compare(a.longVal, b.longVal)) : V.UNKNOWN);
+                break;
+            }
+            case FCMPL: case FCMPG: case DCMPL: case DCMPG: pop(st); pop(st); st.add(V.UNKNOWN); break;
             case IFEQ: case IFNE: case IFLT: case IFGE: case IFGT: case IFLE: case IFNULL: case IFNONNULL:
                 pop(st); return new int[]{pc + 1, labelIndex.get(((JumpInsnNode) n).label)};
             case IF_ICMPEQ: case IF_ICMPNE: case IF_ICMPLT: case IF_ICMPGE: case IF_ICMPGT: case IF_ICMPLE:
@@ -283,6 +344,13 @@ public final class IntCP implements Opcodes {
 
     private static V loc(State s, int i) {
         return (i >= 0 && i < s.locals.length && s.locals[i] != null) ? s.locals[i] : V.UNKNOWN;
+    }
+
+    private static void store(State s, int var, V val, boolean wide) {
+        V[] l = s.locals;
+        if (var - 1 >= 0 && var - 1 < l.length && l[var - 1] != null && l[var - 1].wide) l[var - 1] = V.UNKNOWN;
+        if (var >= 0 && var < l.length) l[var] = val;
+        if (wide && var + 1 >= 0 && var + 1 < l.length) l[var + 1] = V.UNKNOWN;
     }
 
     private static V wideOf(V v) {

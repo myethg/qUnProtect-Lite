@@ -76,8 +76,16 @@ public final class StringDecryptPass implements DeobPass, Opcodes {
         for (MethodNode mn : cn.methods) {
             if (mn.instructions == null) continue;
             if (facts.isSyntheticMethod(mn.name, mn.desc)) continue;
-            for (AbstractInsnNode n : mn.instructions.toArray())
-                if (n.getOpcode() == AALOAD) return true;
+            for (AbstractInsnNode n : mn.instructions.toArray()) {
+                if (n.getOpcode() != AALOAD) continue;
+                AbstractInsnNode a = n.getPrevious();
+                while (a != null && a.getOpcode() < 0) a = a.getPrevious();
+                AbstractInsnNode arr = a == null ? null : a.getPrevious();
+                while (arr != null && arr.getOpcode() < 0) arr = arr.getPrevious();
+                if (arr instanceof FieldInsnNode && arr.getOpcode() == GETSTATIC
+                    && ((FieldInsnNode) arr).owner.equals(cn.name)
+                    && ((FieldInsnNode) arr).name.equals(facts.poolField)) return true;
+            }
         }
         return false;
     }

@@ -6,7 +6,7 @@ what it undoes:
 - string encryption, both the xor and aes ones, finds the keys itself per class
 - invokedynamic call hiding, puts it back to normal calls
 - number obfuscation, folds the math back
-- flow junk (fake if checks, flipped jumps, useless checkcasts, junk) + dead code
+- flow junk: fake if-checks, flipped jumps, useless checkcasts, bogus switch dispatchers, fake try/catch, polymorph junk + dead code
 - the trick where a class is stored as `App.class/` so decompilers cant see it
 - reads java 25 (v69) classfiles too
 
@@ -38,7 +38,7 @@ in and out can be a jar or a folder of .class files.
 - `--no-color`
 - `-h`
 
-passes in order: polymorph, numberfold, strings, indy, opaque, reversejump, checkcast, dce, synthetic, infostrip.
+passes in order: polymorph, numberfold, bogusswitch, faketrycatch, opaque, reversejump, checkcast, dce, strings, indy, synthetic, infostrip. (flow junk is stripped first, then strings/calls are recovered on the clean code)
 
 ## output
 prints each pass as it runs like:

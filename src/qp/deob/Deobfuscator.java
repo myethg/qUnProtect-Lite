@@ -64,18 +64,38 @@ public final class Deobfuscator {
         run(pos.get(0), pos.get(1));
     }
 
+    private final Set<DeobPass> factPasses = new HashSet<>();
+
     private void buildPipeline() {
         pipeline = new ArrayList<>();
         pipeline.add(new PolymorphStripPass());
         pipeline.add(new NumberFoldPass());
-        pipeline.add(new StringDecryptPass());
-        pipeline.add(new IndyResolvePass(env));
+        pipeline.add(new BogusSwitchCollapsePass());
+        pipeline.add(new FakeTryCatchRemovalPass());
         pipeline.add(new OpaquePredicateCollapsePass());
         pipeline.add(new ReverseJumpUninvertPass());
         pipeline.add(new UselessCheckCastPass());
         pipeline.add(new DeadCodePass());
-        pipeline.add(new SyntheticMemberRemovalPass());
-        pipeline.add(new InfoStripNotePass());
+        pipeline.add(new FakeTryCatchRemovalPass());
+        pipeline.add(new DeadCodePass());
+        pipeline.add(new PolymorphStripPass());
+        addFactPass(new StringDecryptPass());
+        addFactPass(new IndyResolvePass(env));
+        addFactPass(new SyntheticMemberRemovalPass());
+        addFactPass(new InfoStripNotePass());
+    }
+
+    private void addFactPass(DeobPass p) {
+        pipeline.add(p);
+        factPasses.add(p);
+    }
+
+    private ClassFacts boundFacts(ClassNode cn, List<String> report) {
+        ClassFacts facts = obtainFacts(cn);
+        List<String> bindReport = new ArrayList<>();
+        if (facts.ok) facts.bind(cn, bindReport);
+        for (String s : bindReport) report.add(cn.name + ": " + s);
+        return facts;
     }
 
     void run(String in, String out) throws Exception {
@@ -128,30 +148,31 @@ public final class Deobfuscator {
 
     private void processClass(ClassNode cn, List<String> report) {
         ClassFacts facts = obtainFacts(cn);
-        List<String> bindReport = new ArrayList<>();
-        if (facts.ok) facts.bind(cn, bindReport);
-        for (String s : bindReport) report.add(cn.name + ": " + s);
-
+        boolean refreshed = false;
         for (DeobPass p : effectivePasses()) {
+            if (!refreshed && factPasses.contains(p)) {
+                facts = boundFacts(cn, report);
+                refreshed = true;
+            }
             PassResult r = safeApply(p, cn, facts);
             accumulate(r);
             liveLine(p, cn, r);
         }
+        if (!refreshed) facts = obtainFacts(cn);
         classifyClass(cn, facts, report);
         classCount++;
     }
 
     private void runStaged(List<ClassNode> nodes, List<String> report) {
         Map<String, ClassFacts> factsByName = new LinkedHashMap<>();
-        for (ClassNode cn : nodes) {
-            ClassFacts f = obtainFacts(cn);
-            List<String> bindReport = new ArrayList<>();
-            if (f.ok) f.bind(cn, bindReport);
-            for (String s : bindReport) report.add(cn.name + ": " + s);
-            factsByName.put(cn.name, f);
-        }
+        for (ClassNode cn : nodes) factsByName.put(cn.name, obtainFacts(cn));
+        boolean refreshed = false;
         int stageNo = 1;
         for (DeobPass p : effectivePasses()) {
+            if (!refreshed && factPasses.contains(p)) {
+                for (ClassNode cn : nodes) factsByName.put(cn.name, boundFacts(cn, report));
+                refreshed = true;
+            }
             PassResult stageAgg = new PassResult();
             for (ClassNode cn : nodes) {
                 PassResult r = safeApply(p, cn, factsByName.get(cn.name));
