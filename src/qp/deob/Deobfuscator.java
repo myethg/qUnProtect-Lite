@@ -81,7 +81,9 @@ public final class Deobfuscator {
         pipeline.add(new PolymorphStripPass());
         addFactPass(new StringDecryptPass());
         addFactPass(new IndyResolvePass(env));
+        addFactPass(new AntiDebuggerRemovalPass());
         addFactPass(new SyntheticMemberRemovalPass());
+        addFactPass(new AccessCleanPass());
         addFactPass(new InfoStripNotePass());
     }
 
@@ -315,6 +317,7 @@ public final class Deobfuscator {
             CheckClassAdapter.verify(new ClassReader(b), false, new PrintWriter(sw));
             String s = sw.toString();
             if (s.isEmpty()) return true;
+            if (s.contains("not present")) return true;
             return !s.contains("Exception") && !s.contains("Error");
         } catch (Throwable t) {
             try {

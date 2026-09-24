@@ -9,6 +9,7 @@ what it undoes:
 - flow junk: fake if-checks, flipped jumps, useless checkcasts, bogus switch dispatchers, fake try/catch, polymorph junk + dead code
 - the trick where a class is stored as `App.class/` so decompilers cant see it
 - reads java 25 (v69) classfiles too
+- neutralises the injected anti-debugger (jdwp/agent checks)
 
 line numbers and local var names that got stripped dont come back, thats just gone.
 
@@ -38,7 +39,7 @@ in and out can be a jar or a folder of .class files.
 - `--no-color`
 - `-h`
 
-passes in order: polymorph, numberfold, bogusswitch, faketrycatch, opaque, reversejump, checkcast, dce, strings, indy, synthetic, infostrip. (flow junk is stripped first, then strings/calls are recovered on the clean code)
+passes in order: polymorph, numberfold, bogusswitch, faketrycatch, opaque, reversejump, checkcast, dce, faketrycatch, dce, polymorph, strings, indy, antidebugger, synthetic, accessclean, infostrip.
 
 ## output
 prints each pass as it runs like:

@@ -41,6 +41,16 @@ public final class Insns implements Opcodes {
         return null;
     }
 
+    public static Long longConstOf(AbstractInsnNode in) {
+        if (in == null) return null;
+        int op = in.getOpcode();
+        if (op == LCONST_0) return 0L;
+        if (op == LCONST_1) return 1L;
+        if (op == LDC && in instanceof LdcInsnNode && ((LdcInsnNode) in).cst instanceof Long)
+            return (Long) ((LdcInsnNode) in).cst;
+        return null;
+    }
+
     public static void pushInt(InsnList il, int v) {
         if (v >= -1 && v <= 5) il.add(new InsnNode(ICONST_0 + v));
         else if (v >= Byte.MIN_VALUE && v <= Byte.MAX_VALUE) il.add(new IntInsnNode(BIPUSH, v));
